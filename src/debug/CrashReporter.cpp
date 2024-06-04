@@ -1,4 +1,5 @@
 #include "CrashReporter.hpp"
+#include <array>
 #include <fcntl.h>
 #include <sys/utsname.h>
 #include <link.h>
@@ -13,7 +14,7 @@
 #include <sys/sysctl.h>
 #endif
 
-static char const* const MESSAGES[] = {"Sorry, didn't mean to...",
+static const std::array<const char*, 14> MESSAGES = {"Sorry, didn't mean to...",
                                        "This was an accident, I swear!",
                                        "Calm down, it was a misinput! MISINPUT!",
                                        "Oops",
@@ -29,8 +30,8 @@ static char const* const MESSAGES[] = {"Sorry, didn't mean to...",
                                        "All these computers..."};
 
 // <random> is not async-signal-safe, fake it with time(NULL) instead
-char const* getRandomMessage() {
-    return MESSAGES[time(NULL) % (sizeof(MESSAGES) / sizeof(MESSAGES[0]))];
+const char* getRandomMessage() {
+    return MESSAGES[time(nullptr) % MESSAGES.size()];
 }
 
 [[noreturn]] inline void exit_with_error(char const* err) {
