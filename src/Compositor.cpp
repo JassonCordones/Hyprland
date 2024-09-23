@@ -571,6 +571,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
 
             Debug::log(LOG, "Creating the InputManager!");
             g_pInputManager = std::make_unique<CInputManager>();
+
+            Debug::log(LOG, "Creating the SeatManager!");
+            g_pSeatManager = std::make_unique<CSeatManager>();
         } break;
         case STAGE_BASICINIT: {
             Debug::log(LOG, "Creating the CHyprOpenGLImpl!");
@@ -578,9 +581,6 @@ void CCompositor::initManagers(eManagersInitStage stage) {
 
             Debug::log(LOG, "Creating the ProtocolManager!");
             g_pProtocolManager = std::make_unique<CProtocolManager>();
-
-            Debug::log(LOG, "Creating the SeatManager!");
-            g_pSeatManager = std::make_unique<CSeatManager>();
         } break;
         case STAGE_LATE: {
             Debug::log(LOG, "Creating the ThreadManager!");

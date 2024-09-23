@@ -5,13 +5,16 @@
 #include "../protocols/PrimarySelection.hpp"
 #include "../protocols/core/Compositor.hpp"
 #include "../Compositor.hpp"
+#include "eventLoop/EventLoopManager.hpp"
 #include "../devices/IKeyboard.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 #include <algorithm>
 #include <ranges>
 
 CSeatManager::CSeatManager() {
-    listeners.newSeatResource = PROTO::seat->events.newSeatResource.registerListener([this](std::any res) { onNewSeatResource(std::any_cast<SP<CWLSeatResource>>(res)); });
+    g_pEventLoopManager->doLater([this]() {
+        listeners.newSeatResource = PROTO::seat->events.newSeatResource.registerListener([this](std::any res) { onNewSeatResource(std::any_cast<SP<CWLSeatResource>>(res)); });
+    });
 }
 
 CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res) {
