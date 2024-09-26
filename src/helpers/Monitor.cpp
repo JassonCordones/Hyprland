@@ -114,7 +114,7 @@ void CMonitor::onConnect(bool noRule) {
         createdByUser = true; // should be true. WL and Headless backends should be addable / removable
 
     // get monitor rule that matches
-    SMonitorRule monitorRule = g_pConfigManager->getMonitorRuleFor(*this);
+    SMonitorRule monitorRule = g_pConfigManager->getMonitorRuleFor(self.lock());
 
     // if it's disabled, disable and ignore
     if (monitorRule.disabled) {
@@ -489,7 +489,7 @@ void CMonitor::setMirror(const std::string& mirrorOf) {
         pMirrorOf = nullptr;
 
         // set rule
-        const auto RULE = g_pConfigManager->getMonitorRuleFor(*this);
+        const auto RULE = g_pConfigManager->getMonitorRuleFor(self.lock());
 
         vecPosition = RULE.offset;
 
@@ -772,12 +772,9 @@ Vector2D CMonitor::middle() {
 }
 
 void CMonitor::updateMatrix() {
-    matrixIdentity(projMatrix.data());
-    if (transform != WL_OUTPUT_TRANSFORM_NORMAL) {
-        matrixTranslate(projMatrix.data(), vecPixelSize.x / 2.0, vecPixelSize.y / 2.0);
-        matrixTransform(projMatrix.data(), wlTransformToHyprutils(transform));
-        matrixTranslate(projMatrix.data(), -vecTransformedSize.x / 2.0, -vecTransformedSize.y / 2.0);
-    }
+    projMatrix = Mat3x3::identity();
+    if (transform != WL_OUTPUT_TRANSFORM_NORMAL)
+        projMatrix.translate(vecPixelSize / 2.0).transform(wlTransformToHyprutils(transform)).translate(-vecTransformedSize / 2.0);
 }
 
 WORKSPACEID CMonitor::activeWorkspaceID() {
