@@ -6,17 +6,16 @@
   pkgconf,
   makeWrapper,
   meson,
-  cmake,
   ninja,
   aquamarine,
   binutils,
   cairo,
   git,
   hyprcursor,
+  hyprland-protocols,
   hyprlang,
   hyprutils,
   hyprwayland-scanner,
-  jq,
   libGL,
   libdrm,
   libexecinfo,
@@ -26,9 +25,9 @@
   mesa,
   pango,
   pciutils,
-  python3,
   systemd,
   tomlplusplus,
+  udis86-hyprland,
   wayland,
   wayland-protocols,
   wayland-scanner,
@@ -95,13 +94,10 @@ in
 
       nativeBuildInputs = [
         hyprwayland-scanner
-        jq
         makeWrapper
         meson
-        cmake
         ninja
         pkg-config
-        python3 # for udis86
       ];
 
       outputs = [
@@ -116,6 +112,7 @@ in
           cairo
           git
           hyprcursor
+          hyprland-protocols
           hyprlang
           hyprutils
           libdrm
@@ -127,6 +124,7 @@ in
           pango
           pciutils
           tomlplusplus
+          udis86-hyprland
           wayland
           wayland-protocols
           wayland-scanner
@@ -146,7 +144,7 @@ in
 
       mesonBuildType =
         if debug
-        then "debug"
+        then "debugoptimized"
         else "release";
 
       # we want as much debug info as possible
@@ -158,7 +156,10 @@ in
           "legacy_renderer" = legacyRenderer;
           "systemd" = withSystemd;
         })
-        (mesonBool "b_pch" false)
+        (mapAttrsToList mesonBool {
+          "b_pch" = false;
+          "tracy_enable" = false;
+        })
       ];
 
       postInstall = ''
