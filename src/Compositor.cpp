@@ -23,6 +23,8 @@
 #include "protocols/PointerConstraints.hpp"
 #include "protocols/LayerShell.hpp"
 #include "protocols/XDGShell.hpp"
+#include "protocols/XDGOutput.hpp"
+#include "protocols/SecurityContext.hpp"
 #include "protocols/core/Compositor.hpp"
 #include "protocols/core/Subcompositor.hpp"
 #include "desktop/LayerSurface.hpp"
@@ -210,9 +212,20 @@ void CCompositor::setRandomSplash() {
 static std::vector<SP<Aquamarine::IOutput>> pendingOutputs;
 
 //
+
+static bool filterGlobals(const wl_client* client, const wl_global* global, void* data) {
+    if (!PROTO::securityContext->isClientSandboxed(client))
+        return true;
+
+    return !g_pProtocolManager || !g_pProtocolManager->isGlobalPrivileged(global);
+}
+
+//
 void CCompositor::initServer(std::string socketName, int socketFd) {
 
     m_sWLDisplay = wl_display_create();
+
+    wl_display_set_global_filter(m_sWLDisplay, ::filterGlobals, nullptr);
 
     m_sWLEventLoop = wl_display_get_event_loop(m_sWLDisplay);
 
@@ -2432,13 +2445,31 @@ void CCompositor::scheduleFrameForMonitor(CMonitor* pMonitor, IOutput::scheduleF
     pMonitor->output->scheduleFrame(reason);
 }
 
-PHLWINDOW CCompositor::getWindowByRegex(const std::string& regexp) {
+PHLWINDOW CCompositor::getWindowByRegex(const std::string& regexp_) {
+    auto regexp = trim(regexp_);
+
     if (regexp.starts_with("active"))
         return m_pLastWindow.lock();
+    else if (regexp.starts_with("floating") || regexp.starts_with("tiled")) {
+        // first floating on the current ws
+        if (!valid(m_pLastWindow))
+            return nullptr;
+
+        const bool FLOAT = regexp.starts_with("floating");
+
+        for (auto const& w : m_vWindows) {
+            if (!w->m_bIsMapped || w->m_bIsFloating != FLOAT || w->m_pWorkspace != m_pLastWindow->m_pWorkspace || w->isHidden())
+                continue;
+
+            return w;
+        }
+
+        return nullptr;
+    }
 
     eFocusWindowMode mode = MODE_CLASS_REGEX;
 
-    std::regex       regexCheck(regexp);
+    std::regex       regexCheck(regexp_);
     std::string      matchCheck;
     if (regexp.starts_with("class:")) {
         regexCheck = std::regex(regexp.substr(6));
@@ -2457,21 +2488,6 @@ PHLWINDOW CCompositor::getWindowByRegex(const std::string& regexp) {
     } else if (regexp.starts_with("pid:")) {
         mode       = MODE_PID;
         matchCheck = regexp.substr(4);
-    } else if (regexp.starts_with("floating") || regexp.starts_with("tiled")) {
-        // first floating on the current ws
-        if (!valid(m_pLastWindow))
-            return nullptr;
-
-        const bool FLOAT = regexp.starts_with("floating");
-
-        for (auto const& w : m_vWindows) {
-            if (!w->m_bIsMapped || w->m_bIsFloating != FLOAT || w->m_pWorkspace != m_pLastWindow->m_pWorkspace || w->isHidden())
-                continue;
-
-            return w;
-        }
-
-        return nullptr;
     }
 
     for (auto const& w : g_pCompositor->m_vWindows) {
@@ -2869,6 +2885,8 @@ void CCompositor::arrangeMonitors() {
         else
             m->xwaylandScale = 1.f;
     }
+
+    PROTO::xdgOutput->updateAllOutputs();
 }
 
 void CCompositor::enterUnsafeState() {

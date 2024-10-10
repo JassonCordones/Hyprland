@@ -12,6 +12,7 @@
 #include "../protocols/DRMSyncobj.hpp"
 #include "../protocols/core/Output.hpp"
 #include "../managers/PointerManager.hpp"
+#include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../protocols/core/Compositor.hpp"
 #include "sync/SyncTimeline.hpp"
 #include <aquamarine/output/Output.hpp>
@@ -35,6 +36,7 @@ CMonitor::~CMonitor() {
 }
 
 void CMonitor::onConnect(bool noRule) {
+    CScopeGuard x = {[]() { g_pCompositor->arrangeMonitors(); }};
 
     if (output->supportsExplicit) {
         inTimeline  = CSyncTimeline::create(output->getBackend()->drmFD());
@@ -228,6 +230,13 @@ void CMonitor::onConnect(bool noRule) {
 }
 
 void CMonitor::onDisconnect(bool destroy) {
+    CScopeGuard x = {[this]() {
+        if (g_pCompositor->m_bIsShuttingDown)
+            return;
+        g_pEventManager->postEvent(SHyprIPCEvent{"monitorremoved", szName});
+        EMIT_HOOK_EVENT("monitorRemoved", this);
+        g_pCompositor->arrangeMonitors();
+    }};
 
     if (renderTimer) {
         wl_event_source_remove(renderTimer);
@@ -340,9 +349,6 @@ void CMonitor::onDisconnect(bool destroy) {
         g_pHyprRenderer->m_pMostHzMonitor = pMonitorMostHz;
     }
     std::erase_if(g_pCompositor->m_vMonitors, [&](SP<CMonitor>& el) { return el.get() == this; });
-
-    g_pEventManager->postEvent(SHyprIPCEvent{"monitorremoved", szName});
-    EMIT_HOOK_EVENT("monitorRemoved", this);
 }
 
 void CMonitor::addDamage(const pixman_region32_t* rg) {
@@ -789,20 +795,28 @@ CBox CMonitor::logicalBox() {
     return {vecPosition, vecSize};
 }
 
-static void onDoneSource(void* data) {
-    auto pMonitor = (CMonitor*)data;
-
-    if (!PROTO::outputs.contains(pMonitor->szName))
+void CMonitor::scheduleDone() {
+    if (doneScheduled)
         return;
 
-    PROTO::outputs.at(pMonitor->szName)->sendDone();
+    doneScheduled = true;
+
+    g_pEventLoopManager->doLater([M = self] {
+        if (!M) // if M is gone, we got destroyed, doesn't matter.
+            return;
+
+        if (!PROTO::outputs.contains(M->szName))
+            return;
+
+        PROTO::outputs.at(M->szName)->sendDone();
+        M->doneScheduled = false;
+    });
 }
 
-void CMonitor::scheduleDone() {
-    if (doneSource)
-        return;
-
-    doneSource = wl_event_loop_add_idle(g_pCompositor->m_sWLEventLoop, ::onDoneSource, this);
+void CMonitor::setCTM(const Mat3x3& ctm_) {
+    ctm        = ctm_;
+    ctmUpdated = true;
+    g_pCompositor->scheduleFrameForMonitor(this, Aquamarine::IOutput::scheduleFrameReason::AQ_SCHEDULE_NEEDS_FRAME);
 }
 
 bool CMonitor::attemptDirectScanout() {

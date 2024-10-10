@@ -772,6 +772,24 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .type        = CONFIG_OPTION_GRADIENT,
         .data        = SConfigOptionDescription::SGradientData{"0x66775500"},
     },
+    SConfigOptionDescription{
+        .value       = "group:auto_group",
+        .description = "automatically group new windows",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
+        .value       = "group:drag_into_group",
+        .description = "whether dragging a window into a unlocked group will merge them. Options: 0 (disabled), 1 (enabled), 2 (only when dragging into the groupbar)",
+        .type        = CONFIG_OPTION_CHOICE,
+        .data        = SConfigOptionDescription::SChoiceData{0, "disabled,enabled,only when dragging into the groupbar"},
+    },
+    SConfigOptionDescription{
+        .value       = "group:merge_floated_into_tiled_on_groupbar",
+        .description = "whether dragging a floating window into a tiled window groupbar will merge them",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{false},
+    },
 
     /*
      * group:groupbar:

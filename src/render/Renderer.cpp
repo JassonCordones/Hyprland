@@ -97,6 +97,16 @@ CHyprRenderer::CHyprRenderer() {
         ensureCursorRenderingMode();
     });
 
+    static auto P3 = g_pHookSystem->hookDynamic("focusedMon", [&](void* self, SCallbackInfo& info, std::any param) {
+        g_pEventLoopManager->doLater([this]() {
+            if (!g_pHyprError->active())
+                return;
+            for (auto& m : g_pCompositor->m_vMonitors) {
+                arrangeLayersForMonitor(m->ID);
+            }
+        });
+    });
+
     m_pCursorTicker = wl_event_loop_add_timer(g_pCompositor->m_sWLEventLoop, cursorTicker, nullptr);
     wl_event_source_timer_update(m_pCursorTicker, 500);
 
@@ -150,7 +160,7 @@ static void renderSurface(SP<CWLSurfaceResource> surface, int x, int y, void* da
 
     const auto& TEXTURE                     = surface->current.texture;
     const auto  RDATA                       = (SRenderData*)data;
-    const auto  INTERACTIVERESIZEINPROGRESS = RDATA->pWindow && g_pInputManager->currentlyDraggedWindow.lock() == RDATA->pWindow && g_pInputManager->dragMode == MBIND_RESIZE;
+    const auto  INTERACTIVERESIZEINPROGRESS = RDATA->pWindow && g_pInputManager->currentlyDraggedWindow && g_pInputManager->dragMode == MBIND_RESIZE;
 
     // this is bad, probably has been logged elsewhere. Means the texture failed
     // uploading to the GPU.
@@ -180,6 +190,7 @@ static void renderSurface(SP<CWLSurfaceResource> surface, int x, int y, void* da
         // however, if surface buffer w / h < box, we need to adjust them
         const auto PWINDOW = PSURFACE ? PSURFACE->getWindow() : nullptr;
 
+        // center the surface if it's smaller than the viewport we assign it
         if (PSURFACE && !PSURFACE->m_bFillIgnoreSmall && PSURFACE->small() /* guarantees PWINDOW */) {
             const auto CORRECT = PSURFACE->correctSmallVec();
             const auto SIZE    = PSURFACE->getViewporterCorrectedSize();
@@ -193,17 +204,6 @@ static void renderSurface(SP<CWLSurfaceResource> surface, int x, int y, void* da
                 windowBox.width  = SIZE.x;
                 windowBox.height = SIZE.y;
             }
-        }
-
-        if (!INTERACTIVERESIZEINPROGRESS && PSURFACE && PWINDOW && PWINDOW->m_vRealSize.goal().floor() > PWINDOW->m_vReportedSize && PWINDOW->m_vReportedSize > Vector2D{1, 1}) {
-            Vector2D size =
-                Vector2D{windowBox.w * (PWINDOW->m_vReportedSize.x / PWINDOW->m_vRealSize.value().x), windowBox.h * (PWINDOW->m_vReportedSize.y / PWINDOW->m_vRealSize.value().y)};
-            Vector2D correct = Vector2D{windowBox.w, windowBox.h} - size;
-
-            windowBox.translate(correct / 2.0);
-
-            windowBox.w = size.x;
-            windowBox.h = size.y;
         }
 
     } else { //  here we clamp to 2, these might be some tiny specks
@@ -231,6 +231,8 @@ static void renderSurface(SP<CWLSurfaceResource> surface, int x, int y, void* da
         return; // invisible
     }
 
+    const auto PROJSIZEUNSCALED = windowBox.size();
+
     windowBox.scale(RDATA->pMonitor->scale);
     windowBox.round();
 
@@ -239,7 +241,7 @@ static void renderSurface(SP<CWLSurfaceResource> surface, int x, int y, void* da
         DELTALESSTHAN(windowBox.height, surface->current.bufferSize.y, 3) /* off by one-or-two */ &&
         (!RDATA->pWindow || (!RDATA->pWindow->m_vRealSize.isBeingAnimated() && !INTERACTIVERESIZEINPROGRESS)) /* not window or not animated/resizing */;
 
-    g_pHyprRenderer->calculateUVForSurface(RDATA->pWindow, surface, RDATA->surface == surface, windowBox.size(), MISALIGNEDFSV1);
+    g_pHyprRenderer->calculateUVForSurface(RDATA->pWindow, surface, RDATA->pMonitor->self.lock(), RDATA->surface == surface, windowBox.size(), PROJSIZEUNSCALED, MISALIGNEDFSV1);
 
     // check for fractional scale surfaces misaligning the buffer size
     // in those cases it's better to just force nearest neighbor
@@ -1083,7 +1085,8 @@ void CHyprRenderer::renderSessionLockMissing(CMonitor* pMonitor) {
         g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->ID);
 }
 
-void CHyprRenderer::calculateUVForSurface(PHLWINDOW pWindow, SP<CWLSurfaceResource> pSurface, bool main, const Vector2D& projSize, bool fixMisalignedFSV1) {
+void CHyprRenderer::calculateUVForSurface(PHLWINDOW pWindow, SP<CWLSurfaceResource> pSurface, SP<CMonitor> pMonitor, bool main, const Vector2D& projSize,
+                                          const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1) {
     if (!pWindow || !pWindow->m_bIsX11) {
         Vector2D uvTL;
         Vector2D uvBR = Vector2D(1, 1);
@@ -1112,6 +1115,22 @@ void CHyprRenderer::calculateUVForSurface(PHLWINDOW pWindow, SP<CWLSurfaceResour
                 uvBR -= MISALIGNMENT * PIXELASUV;
         }
 
+        // if the surface is smaller than our viewport, extend its edges.
+        // this will break if later on xdg geometry is hit, but we really try
+        // to let the apps know to NOT add CSD. Also if source is there.
+        // there is no way to fix this if that's the case
+        const auto MONITOR_WL_SCALE = std::ceil(pMonitor->scale);
+        const bool SCALE_UNAWARE    = MONITOR_WL_SCALE != pSurface->current.scale && !pSurface->current.viewport.hasDestination;
+        const auto EXPECTED_SIZE =
+            ((pSurface->current.viewport.hasDestination ? pSurface->current.viewport.destination : pSurface->current.bufferSize / pSurface->current.scale) * pMonitor->scale)
+                .round();
+        if (!SCALE_UNAWARE && (EXPECTED_SIZE.x < projSize.x || EXPECTED_SIZE.y < projSize.y)) {
+            // this will not work with shm AFAIK, idk why.
+            // NOTE: this math is wrong if we have a source... or geom updates later, but I don't think we can do much
+            const auto FIX = projSize / EXPECTED_SIZE;
+            uvBR           = uvBR * FIX;
+        }
+
         g_pHyprOpenGL->m_RenderData.primarySurfaceUVTopLeft     = uvTL;
         g_pHyprOpenGL->m_RenderData.primarySurfaceUVBottomRight = uvBR;
 
@@ -1127,18 +1146,17 @@ void CHyprRenderer::calculateUVForSurface(PHLWINDOW pWindow, SP<CWLSurfaceResour
         CBox geom = pWindow->m_pXDGSurface->current.geometry;
 
         // ignore X and Y, adjust uv
-        if (geom.x != 0 || geom.y != 0 || geom.width > pWindow->m_vRealSize.value().x || geom.height > pWindow->m_vRealSize.value().y) {
+        if (geom.x != 0 || geom.y != 0 || geom.width > projSizeUnscaled.x || geom.height > projSizeUnscaled.y) {
             const auto XPERC = (double)geom.x / (double)pSurface->current.size.x;
             const auto YPERC = (double)geom.y / (double)pSurface->current.size.y;
             const auto WPERC = (double)(geom.x + geom.width) / (double)pSurface->current.size.x;
             const auto HPERC = (double)(geom.y + geom.height) / (double)pSurface->current.size.y;
 
             const auto TOADDTL = Vector2D(XPERC * (uvBR.x - uvTL.x), YPERC * (uvBR.y - uvTL.y));
-            uvBR               = uvBR - Vector2D(1.0 - WPERC * (uvBR.x - uvTL.x), 1.0 - HPERC * (uvBR.y - uvTL.y));
+            uvBR               = uvBR - Vector2D((1.0 - WPERC) * (uvBR.x - uvTL.x), (1.0 - HPERC) * (uvBR.y - uvTL.y));
             uvTL               = uvTL + TOADDTL;
 
-            // TODO: make this passed to the func. Might break in the future.
-            auto maxSize = pWindow->m_vRealSize.value();
+            auto maxSize = projSizeUnscaled;
 
             if (pWindow->m_pWLSurface->small() && !pWindow->m_pWLSurface->m_bFillIgnoreSmall)
                 maxSize = pWindow->m_pWLSurface->getViewporterCorrectedSize();
@@ -1490,6 +1508,11 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(CMonitor* pMonitor) {
     if (inFD >= 0)
         pMonitor->output->state->setExplicitInFence(inFD);
 
+    if (pMonitor->ctmUpdated) {
+        pMonitor->ctmUpdated = false;
+        pMonitor->output->state->setCTM(pMonitor->ctm);
+    }
+
     bool ok = pMonitor->state.commit();
     if (!ok) {
         if (inFD >= 0) {
@@ -1733,7 +1756,9 @@ void CHyprRenderer::arrangeLayerArray(CMonitor* pMonitor, const std::vector<PHLL
 }
 
 void CHyprRenderer::arrangeLayersForMonitor(const MONITORID& monitor) {
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(monitor);
+    const auto  PMONITOR = g_pCompositor->getMonitorFromID(monitor);
+
+    static auto BAR_POSITION = CConfigValue<Hyprlang::INT>("debug:error_position");
 
     if (!PMONITOR)
         return;
@@ -1743,6 +1768,18 @@ void CHyprRenderer::arrangeLayersForMonitor(const MONITORID& monitor) {
     PMONITOR->vecReservedTopLeft     = Vector2D();
 
     CBox usableArea = {PMONITOR->vecPosition.x, PMONITOR->vecPosition.y, PMONITOR->vecSize.x, PMONITOR->vecSize.y};
+
+    if (g_pHyprError->active() && g_pCompositor->m_pLastMonitor == PMONITOR->self) {
+        const auto HEIGHT = g_pHyprError->height();
+        if (*BAR_POSITION == 0) {
+            PMONITOR->vecReservedTopLeft.y = HEIGHT;
+            usableArea.y += HEIGHT;
+            usableArea.h -= HEIGHT;
+        } else {
+            PMONITOR->vecReservedBottomRight.y = HEIGHT;
+            usableArea.h -= HEIGHT;
+        }
+    }
 
     for (auto& la : PMONITOR->m_aLayerSurfaceLayers) {
         std::stable_sort(la.begin(), la.end(), [](const PHLLSREF& a, const PHLLSREF& b) { return a->order > b->order; });

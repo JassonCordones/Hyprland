@@ -131,6 +131,10 @@ class CMonitor {
     CMonitor*              pMirrorOf = nullptr;
     std::vector<CMonitor*> mirrors;
 
+    // ctm
+    Mat3x3 ctm        = Mat3x3::identity();
+    bool   ctmUpdated = false;
+
     // for tearing
     PHLWINDOWREF solitaryClient;
 
@@ -179,6 +183,7 @@ class CMonitor {
     CBox        logicalBox();
     void        scheduleDone();
     bool        attemptDirectScanout();
+    void        setCTM(const Mat3x3& ctm);
 
     bool        m_bEnabled             = false;
     bool        m_bRenderingInitPassed = false;
@@ -190,10 +195,10 @@ class CMonitor {
     }
 
   private:
-    void             setupDefaultWS(const SMonitorRule&);
-    WORKSPACEID      findAvailableDefaultWS();
+    void        setupDefaultWS(const SMonitorRule&);
+    WORKSPACEID findAvailableDefaultWS();
 
-    wl_event_source* doneSource = nullptr;
+    bool        doneScheduled = false;
 
     struct {
         CHyprSignalListener frame;
